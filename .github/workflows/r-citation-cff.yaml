@@ -65,7 +65,7 @@ jobs:
           packages: cffr
 
       # The recipe gets a step of its own: a heredoc that fails to terminate here swallows
-      # nothing but itself, and the empty-file check below turns it red.
+      # nothing but itself, and the last-line check below turns it red.
       - name: Write the CITATION.cff recipe
         run: |
           # No CRAN-namesake DOI or page, the concept DOI from DESCRIPTION's Config/DOI, and
