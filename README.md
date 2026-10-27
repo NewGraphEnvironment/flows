@@ -8,7 +8,7 @@ instead of in every repository.
 |---|---|---|
 | `r-cmd-check.yaml` | `R CMD check`, then prints every skipped-test block | `runs-on` (`ubuntu-24.04`), `timeout-minutes` (45), `error-on` (`'"warning"'`), `extra-packages`, `build-args` (`c("--no-manual")`) |
 | `r-pkgdown.yaml` | builds the pkgdown site without `CLAUDE.md`, fails on an undeclared root page, deploys to `gh-pages` | `runs-on`, `timeout-minutes` (90), `allowed-pages` (`404 authors index LICENSE LICENSE-text`), `deploy` (`true`), `extra-packages` |
-| `r-citation-cff.yaml` | regenerates `CITATION.cff` from `DESCRIPTION` and pushes it to `main`, queued and regenerated on a fresh `main` at each attempt so a release's quick pushes cannot leave it stale | `runs-on`, `timeout-minutes` (15) |
+| `r-citation-cff.yaml` | regenerates `CITATION.cff` from `DESCRIPTION` and pushes it to `main`, queued and regenerated on a fresh `main` at each attempt so a release's quick pushes do not leave it stale | `runs-on`, `timeout-minutes` (15) |
 
 ## Calling one
 

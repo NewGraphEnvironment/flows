@@ -64,7 +64,9 @@ jobs:
         with:
           packages: cffr
 
-      - name: Update CITATION.cff
+      # The recipe gets a step of its own: a heredoc that fails to terminate here swallows
+      # nothing but itself, and the empty-file check below turns it red.
+      - name: Write the CITATION.cff recipe
         run: |
           # No CRAN-namesake DOI or page, the concept DOI from DESCRIPTION's Config/DOI, and
           # the firm as publisher.
@@ -85,10 +87,17 @@ jobs:
           x$`preferred-citation` <- pc
           cffr::cff_write(x = x)
           EOF
+
+      - name: Update CITATION.cff
+        run: |
+          tail -1 "$RUNNER_TEMP/citation.R" | grep -qx 'cffr::cff_write(x = x)' \
+            || { echo "the recipe file is not the recipe"; exit 1; }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           for i in 1 2 3; do
-            git fetch -q origin main
+            if ! git fetch -q origin main; then
+              echo "fetch failed (attempt $i)"; sleep 10; continue
+            fi
             git reset -q --hard origin/main
             Rscript "$RUNNER_TEMP/citation.R"
             # porcelain, not `git diff`: an untracked CITATION.cff is a change too
@@ -98,6 +107,6 @@ jobs:
             git add CITATION.cff
             git commit -q -m "Auto-update CITATION.cff from DESCRIPTION"
             if git push origin HEAD:main; then exit 0; fi
-            echo "push rejected (attempt $i): main moved; regenerating from the newer main"
+            echo "push failed (attempt $i); retrying from the newer main"
           done
           exit 1
