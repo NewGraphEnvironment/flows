@@ -38,13 +38,17 @@ on:
         description: Packages to install beyond the package's dependencies, comma or space separated.
         type: string
         default: ''
+      build-args:
+        description: check-r-package's build_args, an R character vector.
+        type: string
+        default: 'c("--no-manual")'
 
 jobs:
   R-CMD-check:
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
-      group: check-${{ github.event_name != 'pull_request' || github.run_id }}
+      group: check-${{ github.repository }}-${{ github.event_name != 'pull_request' || github.run_id }}
       cancel-in-progress: true
     env:
       GITHUB_PAT: ${{ github.token }}
@@ -66,7 +70,7 @@ jobs:
       - uses: r-lib/actions/check-r-package@v2
         with:
           upload-snapshots: true
-          build_args: 'c("--no-manual")'
+          build_args: ${{ inputs.build-args }}
           error-on: ${{ inputs.error-on }}
 
       # A skip is invisible behind a green tick, so print every skip block the tests wrote.

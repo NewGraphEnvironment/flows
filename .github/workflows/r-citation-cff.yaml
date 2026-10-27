@@ -22,10 +22,14 @@
 #      one pending run and cancels older pending ones, which is safe because of 2.
 #   2. Each run checks out main as it is when the run starts, not the commit that
 #      triggered it, so a queued run made redundant by a later one finds nothing to commit.
-#   3. Each run rebases onto main before pushing. With 1 and 2, what can move main mid-run
-#      is a commit that does not touch CITATION.cff (NEWS, code), so the rebase is clean.
+#   3. Each run rebases onto main before pushing, up to three times. With 1 and 2, what can
+#      move main mid-run is a commit that does not touch CITATION.cff, so the rebase is clean.
+#      When that commit is a later DESCRIPTION, this run pushes the older version and the run
+#      queued behind it (which 1 guarantees) writes the newer one.
 # A bare rebase without 1 and 2 is not enough: an older run could rebase its content on
 # top of a newer run's and win.
+#
+# The R recipe below has a twin in soul's /citation-cff skill (step 2a); change both.
 
 name: r-citation-cff
 
@@ -45,8 +49,10 @@ jobs:
   update-citation:
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    # Keyed on the repository, so callers in different repos never share a queue. A caller job
+    # must not set a concurrency group of its own as well.
     concurrency:
-      group: update-citation-cff
+      group: update-citation-cff-${{ github.repository }}
       cancel-in-progress: false
     permissions:
       contents: write
@@ -92,6 +98,11 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add CITATION.cff
             git commit -m "Auto-update CITATION.cff from DESCRIPTION"
-            git pull --rebase origin main
-            git push origin HEAD:main
+            # A push can still land between the rebase and the push; try three times.
+            for i in 1 2 3; do
+              git pull --rebase origin main
+              if git push origin HEAD:main; then exit 0; fi
+              echo "push rejected (attempt $i); rebasing again"
+            done
+            exit 1
           fi

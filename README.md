@@ -6,7 +6,7 @@ instead of in every repository.
 
 | workflow | does | inputs (default) |
 |---|---|---|
-| `r-cmd-check.yaml` | `R CMD check`, then prints every skipped-test block | `runs-on` (`ubuntu-24.04`), `timeout-minutes` (45), `error-on` (`'"warning"'`), `extra-packages` |
+| `r-cmd-check.yaml` | `R CMD check`, then prints every skipped-test block | `runs-on` (`ubuntu-24.04`), `timeout-minutes` (45), `error-on` (`'"warning"'`), `extra-packages`, `build-args` (`c("--no-manual")`) |
 | `r-pkgdown.yaml` | builds the pkgdown site without `CLAUDE.md`, fails on an undeclared root page, deploys to `gh-pages` | `runs-on`, `timeout-minutes` (90), `allowed-pages` (`404 authors index LICENSE LICENSE-text`), `deploy` (`true`), `extra-packages` |
 | `r-citation-cff.yaml` | regenerates `CITATION.cff` from `DESCRIPTION` and pushes it to `main`, serialized and rebased so a release's quick pushes cannot leave it stale | `runs-on`, `timeout-minutes` (15) |
 
@@ -41,22 +41,26 @@ jobs:
 ```
 
 The called job runs with the caller job's token, so the caller grants what the job needs:
-`contents: write` for a pkgdown deploy and for the citation push.
+`contents: write` for a pkgdown deploy and for the citation push. A caller job sets no
+`concurrency` of its own: the called job's group is keyed on the repository already.
 
 A package that needs what the inputs cannot express (a matrix, an extra check step) keeps
 its own workflow and says why in a comment beside the difference.
 
 ## Versions
 
-Callers pin `@v1`, a tag that moves forward with every compatible change. A change that
-would break a caller (a renamed or removed input, a new required permission) goes out as
-`v2`, and callers move to it deliberately.
-
-To release a compatible change, merge it to `main`, then move the tag:
+Callers pin `@v1`, a **branch** that only ever fast-forwards to a reviewed commit on `main`.
+A change that would break a caller (a renamed or removed input, a new required permission)
+goes out as `v2`, and callers move to it deliberately. To release a compatible change, merge
+it to `main`, then:
 
 ```bash
-git tag -f v1 && git push -f origin v1
+git push origin main:v1
 ```
+
+That push is refused unless it is a fast-forward. Each new run reads `v1` when it starts.
+**Re-run failed jobs** reuses the workflow from the first attempt; to pick up a change, use
+**Re-run all jobs** or push a new commit.
 
 ## Runner image
 
@@ -75,6 +79,12 @@ execution time of …":
 ```bash
 gh api repos/<owner>/<repo>/check-runs/<job id>/annotations --jq '.[].message'
 ```
+
+## The citation recipe
+
+The R code in `r-citation-cff.yaml` that builds `CITATION.cff` (no CRAN-namesake DOI, the
+concept DOI from `Config/DOI`, the firm as publisher) is also run by hand when a package's
+citation is first set up. Change both together.
 
 ## License
 
