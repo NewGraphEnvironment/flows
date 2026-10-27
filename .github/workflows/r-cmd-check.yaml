@@ -1,0 +1,103 @@
+# R CMD check, on one runner.
+#
+# Called from a package's .github/workflows/R-CMD-check.yaml:
+#
+#   on:
+#     push:
+#       branches: [main]
+#     pull_request:
+#     workflow_dispatch:
+#   name: R-CMD-check.yaml
+#   permissions: read-all
+#   jobs:
+#     R-CMD-check:
+#       uses: NewGraphEnvironment/flows/.github/workflows/r-cmd-check.yaml@v1
+#
+# A package that needs more than the inputs below (a matrix, a system library, an extra
+# guard step) keeps its own workflow and says why in a comment.
+# Derived from https://github.com/r-lib/actions/tree/v2/examples
+
+name: r-cmd-check
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner image. Named rather than ubuntu-latest, so an image change is one edit here.
+        type: string
+        default: ubuntu-24.04
+      timeout-minutes:
+        description: A stalled apt mirror or a package compiling from source otherwise holds the job for 6 h.
+        type: number
+        default: 45
+      error-on:
+        description: check-r-package's error-on, an R string such as '"warning"' or '"error"'.
+        type: string
+        default: '"warning"'
+      extra-packages:
+        description: Packages to install beyond the package's dependencies, comma or space separated.
+        type: string
+        default: ''
+      build-args:
+        description: check-r-package's build_args, an R character vector.
+        type: string
+        default: 'c("--no-manual")'
+
+jobs:
+  R-CMD-check:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: check-${{ github.repository }}-${{ github.event_name != 'pull_request' || github.run_id }}
+      cancel-in-progress: true
+    env:
+      GITHUB_PAT: ${{ github.token }}
+      R_KEEP_PKG_SOURCE: yes
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::rcmdcheck, ${{ inputs.extra-packages }}
+          needs: check
+
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          upload-snapshots: true
+          build_args: ${{ inputs.build-args }}
+          error-on: ${{ inputs.error-on }}
+
+      # A skip is invisible behind a green tick, so print every skip block the tests wrote.
+      - name: Report skipped tests
+        if: ${{ !cancelled() }}
+        shell: Rscript {0}
+        run: |
+          tdirs <- file.path(list.dirs("check", recursive = FALSE), "tests")
+          tdirs <- tdirs[dir.exists(tdirs)]
+          if (!length(tdirs)) {
+            cat("no tests/ under check/ -- the check did not reach the test stage, or the package has no tests\n")
+            quit(save = "no")
+          }
+          outs <- list.files(tdirs, pattern = "[.]Rout", full.names = TRUE, recursive = TRUE)
+          if (!length(outs)) {
+            stop("tests/ is present under check/ but holds no .Rout -- this step cannot ",
+                 "see the test output and would be reporting nothing about nothing")
+          }
+          hit <- FALSE
+          for (f in outs) {
+            x <- readLines(f, warn = FALSE)
+            i <- grep("Skipped tests", x, fixed = TRUE)
+            if (length(i)) {
+              hit <- TRUE
+              cat("==", f, "\n")
+              cat(x[i[1]:length(x)], sep = "\n")
+              cat("\n")
+            }
+          }
+          if (!hit) cat("No skip block in", length(outs), ".Rout file(s).\n")

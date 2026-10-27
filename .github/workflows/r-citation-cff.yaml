@@ -1,0 +1,112 @@
+# Regenerate CITATION.cff from DESCRIPTION and push it to main.
+#
+# Called from a package's .github/workflows/update-citation-cff.yaml:
+#
+#   name: Update CITATION.cff
+#   on:
+#     push:
+#       branches: [main]
+#       paths: ['DESCRIPTION']
+#     workflow_dispatch:
+#   permissions:
+#     contents: write
+#   jobs:
+#     update-citation:
+#       uses: NewGraphEnvironment/flows/.github/workflows/r-citation-cff.yaml@v1
+#
+# A release pushes DESCRIPTION more than once within a minute (the merge, then the date
+# stamp), and a run that ends in a bare `git push` loses to whatever landed meanwhile, with
+# `! [rejected] (fetch first)`. When every run loses, nothing writes the new version. Here:
+#   1. Runs of this job queue instead of overlapping (the concurrency group). GitHub keeps
+#      one pending run and cancels older pending ones, which is safe because of 2.
+#   2. Each attempt resets to main as it is now, regenerates and pushes. A rejected push
+#      starts the next attempt from the newer main, so CITATION.cff is always built from
+#      the DESCRIPTION it lands beside, and a hand edit to CITATION.cff cannot conflict.
+# The job writes to main whatever branch dispatched it.
+#
+# The R recipe is also run by hand when a package's citation is first set up; change both.
+
+name: r-citation-cff
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner image. Named rather than ubuntu-latest, so an image change is one edit here.
+        type: string
+        default: ubuntu-24.04
+      timeout-minutes:
+        description: A stalled apt mirror or a source build otherwise holds the job for 6 h.
+        type: number
+        default: 15
+
+jobs:
+  update-citation:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    # Keyed on the repository, so callers in different repos never share a queue. A caller job
+    # must not set a concurrency group of its own as well.
+    concurrency:
+      group: update-citation-cff-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: cffr
+
+      # The recipe gets a step of its own: a heredoc that fails to terminate here swallows
+      # nothing but itself, and the last-line check below turns it red.
+      - name: Write the CITATION.cff recipe
+        run: |
+          # No CRAN-namesake DOI or page, the concept DOI from DESCRIPTION's Config/DOI, and
+          # the firm as publisher.
+          cat > "$RUNNER_TEMP/citation.R" <<'EOF'
+          x <- cffr::cff_create()
+          x$references <- NULL; x$doi <- NULL; x$repository <- NULL
+          x$identifiers <- Filter(function(i) !grepl("CRAN.package", i$value, fixed = TRUE), unclass(x$identifiers))
+          if (!length(x$identifiers)) x$identifiers <- NULL
+          d <- read.dcf("DESCRIPTION", fields = c("Package", "Config/DOI"))
+          if (!is.na(d[1, 2])) {
+            x$doi <- d[1, 2]
+            x$message <- paste0("If you use ", d[1, 1], ", please cite it by its DOI, ", x$doi, ".")
+          }
+          pc <- x[intersect(c("title", "authors", "version", "date-released", "url",
+                              "repository-code", "license", "doi"), names(x))]
+          pc$type <- "software"
+          pc$publisher <- list(name = "New Graph Environment Ltd.")
+          x$`preferred-citation` <- pc
+          cffr::cff_write(x = x)
+          EOF
+
+      - name: Update CITATION.cff
+        run: |
+          tail -1 "$RUNNER_TEMP/citation.R" | grep -qx 'cffr::cff_write(x = x)' \
+            || { echo "the recipe file is not the recipe"; exit 1; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for i in 1 2 3; do
+            if ! git fetch -q origin main; then
+              echo "fetch failed (attempt $i)"; sleep 10; continue
+            fi
+            git reset -q --hard origin/main
+            Rscript "$RUNNER_TEMP/citation.R"
+            # porcelain, not `git diff`: an untracked CITATION.cff is a change too
+            if [ -z "$(git status --porcelain -- CITATION.cff)" ]; then
+              echo "CITATION.cff already matches DESCRIPTION"; exit 0
+            fi
+            git add CITATION.cff
+            git commit -q -m "Auto-update CITATION.cff from DESCRIPTION"
+            if git push origin HEAD:main; then exit 0; fi
+            echo "push failed (attempt $i); retrying from the newer main"
+          done
+          exit 1
