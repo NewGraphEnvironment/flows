@@ -14,22 +14,17 @@
 #     update-citation:
 #       uses: NewGraphEnvironment/flows/.github/workflows/r-citation-cff.yaml@v1
 #
-# Three things together keep a release from leaving CITATION.cff stale. A release pushes
-# DESCRIPTION more than once within a minute (the merge, then the date stamp), and a run
-# that ends in a bare `git push` loses to whatever landed meanwhile, with `! [rejected]
-# (fetch first)`. When every run loses, nothing writes the new version.
+# A release pushes DESCRIPTION more than once within a minute (the merge, then the date
+# stamp), and a run that ends in a bare `git push` loses to whatever landed meanwhile, with
+# `! [rejected] (fetch first)`. When every run loses, nothing writes the new version. Here:
 #   1. Runs of this job queue instead of overlapping (the concurrency group). GitHub keeps
 #      one pending run and cancels older pending ones, which is safe because of 2.
-#   2. Each run checks out main as it is when the run starts, not the commit that
-#      triggered it, so a queued run made redundant by a later one finds nothing to commit.
-#   3. Each run rebases onto main before pushing, up to three times. With 1 and 2, what can
-#      move main mid-run is a commit that does not touch CITATION.cff, so the rebase is clean.
-#      When that commit is a later DESCRIPTION, this run pushes the older version and the run
-#      queued behind it (which 1 guarantees) writes the newer one.
-# A bare rebase without 1 and 2 is not enough: an older run could rebase its content on
-# top of a newer run's and win.
+#   2. Each attempt resets to main as it is now, regenerates and pushes. A rejected push
+#      starts the next attempt from the newer main, so CITATION.cff is always built from
+#      the DESCRIPTION it lands beside, and a hand edit to CITATION.cff cannot conflict.
+# The job writes to main whatever branch dispatched it.
 #
-# The R recipe below has a twin in soul's /citation-cff skill (step 2a); change both.
+# The R recipe is also run by hand when a package's citation is first set up; change both.
 
 name: r-citation-cff
 
@@ -57,7 +52,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
 
@@ -69,40 +64,40 @@ jobs:
         with:
           packages: cffr
 
-      # No CRAN-namesake DOI or page, the concept DOI from DESCRIPTION's Config/DOI, and
-      # the firm as publisher. The same recipe as soul's /citation-cff step 2a.
       - name: Update CITATION.cff
         run: |
-          Rscript -e '
-            x <- cffr::cff_create()
-            x$references <- NULL; x$doi <- NULL; x$repository <- NULL
-            x$identifiers <- Filter(function(i) !grepl("CRAN.package", i$value, fixed = TRUE), unclass(x$identifiers))
-            if (!length(x$identifiers)) x$identifiers <- NULL
-            d <- read.dcf("DESCRIPTION", fields = c("Package", "Config/DOI"))
-            if (!is.na(d[1, 2])) {
-              x$doi <- d[1, 2]
-              x$message <- paste0("If you use ", d[1, 1], ", please cite it by its DOI, ", x$doi, ".")
-            }
-            pc <- x[intersect(c("title", "authors", "version", "date-released", "url",
-                                "repository-code", "license", "doi"), names(x))]
-            pc$type <- "software"
-            pc$publisher <- list(name = "New Graph Environment Ltd.")
-            x$`preferred-citation` <- pc
-            cffr::cff_write(x = x)
-          '
-
-      - name: Commit if changed
-        run: |
-          if ! git diff --quiet CITATION.cff; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # No CRAN-namesake DOI or page, the concept DOI from DESCRIPTION's Config/DOI, and
+          # the firm as publisher.
+          cat > "$RUNNER_TEMP/citation.R" <<'EOF'
+          x <- cffr::cff_create()
+          x$references <- NULL; x$doi <- NULL; x$repository <- NULL
+          x$identifiers <- Filter(function(i) !grepl("CRAN.package", i$value, fixed = TRUE), unclass(x$identifiers))
+          if (!length(x$identifiers)) x$identifiers <- NULL
+          d <- read.dcf("DESCRIPTION", fields = c("Package", "Config/DOI"))
+          if (!is.na(d[1, 2])) {
+            x$doi <- d[1, 2]
+            x$message <- paste0("If you use ", d[1, 1], ", please cite it by its DOI, ", x$doi, ".")
+          }
+          pc <- x[intersect(c("title", "authors", "version", "date-released", "url",
+                              "repository-code", "license", "doi"), names(x))]
+          pc$type <- "software"
+          pc$publisher <- list(name = "New Graph Environment Ltd.")
+          x$`preferred-citation` <- pc
+          cffr::cff_write(x = x)
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for i in 1 2 3; do
+            git fetch -q origin main
+            git reset -q --hard origin/main
+            Rscript "$RUNNER_TEMP/citation.R"
+            # porcelain, not `git diff`: an untracked CITATION.cff is a change too
+            if [ -z "$(git status --porcelain -- CITATION.cff)" ]; then
+              echo "CITATION.cff already matches DESCRIPTION"; exit 0
+            fi
             git add CITATION.cff
-            git commit -m "Auto-update CITATION.cff from DESCRIPTION"
-            # A push can still land between the rebase and the push; try three times.
-            for i in 1 2 3; do
-              git pull --rebase origin main
-              if git push origin HEAD:main; then exit 0; fi
-              echo "push rejected (attempt $i); rebasing again"
-            done
-            exit 1
-          fi
+            git commit -q -m "Auto-update CITATION.cff from DESCRIPTION"
+            if git push origin HEAD:main; then exit 0; fi
+            echo "push rejected (attempt $i): main moved; regenerating from the newer main"
+          done
+          exit 1

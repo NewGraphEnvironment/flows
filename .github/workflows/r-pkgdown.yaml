@@ -58,7 +58,7 @@ jobs:
     env:
       GITHUB_PAT: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # pkgdown renders EVERY root-level .md except a hardcoded allowlist (README,
       # LICENSE, NEWS and two GitHub templates), and there is no config option to
@@ -135,7 +135,7 @@ jobs:
 
       - name: Deploy to GitHub pages
         if: inputs.deploy && github.event_name != 'pull_request'
-        uses: JamesIves/github-pages-deploy-action@v4.5.0
+        uses: JamesIves/github-pages-deploy-action@v4.8.0
         with:
           # `clean: true` makes the site equal what the build produced. `clean: false` never
           # deletes, so a page removed from the build would stay published.
