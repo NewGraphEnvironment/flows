@@ -1,0 +1,97 @@
+# Regenerate CITATION.cff from DESCRIPTION and push it to main.
+#
+# Called from a package's .github/workflows/update-citation-cff.yaml:
+#
+#   name: Update CITATION.cff
+#   on:
+#     push:
+#       branches: [main]
+#       paths: ['DESCRIPTION']
+#     workflow_dispatch:
+#   permissions:
+#     contents: write
+#   jobs:
+#     update-citation:
+#       uses: NewGraphEnvironment/flows/.github/workflows/r-citation-cff.yaml@v1
+#
+# Three things together keep a release from leaving CITATION.cff stale. A release pushes
+# DESCRIPTION more than once within a minute (the merge, then the date stamp), and a run
+# that ends in a bare `git push` loses to whatever landed meanwhile, with `! [rejected]
+# (fetch first)`. When every run loses, nothing writes the new version.
+#   1. Runs of this job queue instead of overlapping (the concurrency group). GitHub keeps
+#      one pending run and cancels older pending ones, which is safe because of 2.
+#   2. Each run checks out main as it is when the run starts, not the commit that
+#      triggered it, so a queued run made redundant by a later one finds nothing to commit.
+#   3. Each run rebases onto main before pushing. With 1 and 2, what can move main mid-run
+#      is a commit that does not touch CITATION.cff (NEWS, code), so the rebase is clean.
+# A bare rebase without 1 and 2 is not enough: an older run could rebase its content on
+# top of a newer run's and win.
+
+name: r-citation-cff
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner image. Named rather than ubuntu-latest, so an image change is one edit here.
+        type: string
+        default: ubuntu-24.04
+      timeout-minutes:
+        description: A stalled apt mirror or a source build otherwise holds the job for 6 h.
+        type: number
+        default: 15
+
+jobs:
+  update-citation:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: update-citation-cff
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: cffr
+
+      # No CRAN-namesake DOI or page, the concept DOI from DESCRIPTION's Config/DOI, and
+      # the firm as publisher. The same recipe as soul's /citation-cff step 2a.
+      - name: Update CITATION.cff
+        run: |
+          Rscript -e '
+            x <- cffr::cff_create()
+            x$references <- NULL; x$doi <- NULL; x$repository <- NULL
+            x$identifiers <- Filter(function(i) !grepl("CRAN.package", i$value, fixed = TRUE), unclass(x$identifiers))
+            if (!length(x$identifiers)) x$identifiers <- NULL
+            d <- read.dcf("DESCRIPTION", fields = c("Package", "Config/DOI"))
+            if (!is.na(d[1, 2])) {
+              x$doi <- d[1, 2]
+              x$message <- paste0("If you use ", d[1, 1], ", please cite it by its DOI, ", x$doi, ".")
+            }
+            pc <- x[intersect(c("title", "authors", "version", "date-released", "url",
+                                "repository-code", "license", "doi"), names(x))]
+            pc$type <- "software"
+            pc$publisher <- list(name = "New Graph Environment Ltd.")
+            x$`preferred-citation` <- pc
+            cffr::cff_write(x = x)
+          '
+
+      - name: Commit if changed
+        run: |
+          if ! git diff --quiet CITATION.cff; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add CITATION.cff
+            git commit -m "Auto-update CITATION.cff from DESCRIPTION"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
